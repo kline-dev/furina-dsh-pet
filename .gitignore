@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.log
+pet-assets/desktop-settings.json
+.desktop-pet/
