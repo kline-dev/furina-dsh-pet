@@ -17,16 +17,19 @@ return {
       return
     }
 
-    // 素材目录：优先使用 DSH 会话工作区根目录（可移植），
-    // 失败时回退到固定路径。请保证工作区下有 pet-assets/sprite-clean.png。
-    let workspace = 'C:\\Users\\34541\\Desktop\\codex furina switch'
+    // 素材目录候选（按顺序回退）：会话工作区根目录 -> 固定路径。
+    // 注意：某些环境下 sandboxPolicy.workspaceRoot 可能指向别处，
+    // 因此按候选列表逐个尝试，找到 sprite-clean.png 为止。
+    const candidateDirs = []
     try {
       const sp = ctx.get('sandboxPolicy')
       if (sp !== undefined && typeof sp.workspaceRoot === 'string' && sp.workspaceRoot.length > 0) {
-        workspace = sp.workspaceRoot
+        candidateDirs.push(sp.workspaceRoot)
       }
     } catch (e) {}
+    candidateDirs.push('C:\\Users\\34541\\Desktop\\codex furina switch')
     let sprite = null
+    let spriteInfo = null
 
     const state = {
       running: false,
@@ -112,22 +115,34 @@ return {
     // 启动时从实时投影恢复任务清单。
     refreshTodosFromProjection()
 
+    const loadSprite = async () => {
+      for (let i = 0; i < candidateDirs.length; i++) {
+        try {
+          const target = await fs.resolve('pet-assets/sprite-clean.png', { cwd: candidateDirs[i] })
+          const bytes = await fs.readBytes(target, undefined, 10 * 1024 * 1024)
+          if (bytes !== undefined && bytes !== null && bytes.byteLength > 1000) {
+            spriteInfo = { dir: candidateDirs[i], size: bytes.byteLength }
+            return bytes
+          }
+        } catch (e) {}
+      }
+      return null
+    }
+
     // 提供清洁版雪碧图（无损 PNG，已去除有损 WebP 边缘光晕）。
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/dsh-pet-assets/furina/sprite.webp',
       handler: async (req, res) => {
         try {
-          if (sprite === null) {
-            const target = await fs.resolve('pet-assets/sprite-clean.png', { cwd: workspace })
-            sprite = await fs.readBytes(target, undefined, 10 * 1024 * 1024)
-          }
+          if (sprite === null) sprite = await loadSprite()
+          if (sprite === null) { res.writeHead(404); res.end('sprite missing'); return }
           res.setHeader('Content-Type', 'image/png')
           res.setHeader('Cache-Control', 'public, max-age=86400')
           res.writeHead(200)
           res.end(sprite)
         } catch (e) {
-          try { res.writeHead(404); res.end('sprite missing') } catch (e2) {}
+          try { res.writeHead(500); res.end('error') } catch (e2) {}
         }
       },
     }))
@@ -299,6 +314,7 @@ return {
         subagents: state.subagents,
         progress: buildProgress(liveRunning),
         todos: state.todos === null ? null : state.todos.map((item) => ({ content: item.content, status: item.status })),
+        debug: { workspaceRoot: candidateDirs[0] || null, sprite: spriteInfo === null ? null : { dir: spriteInfo.dir, size: spriteInfo.size } },
       }
     }
 
